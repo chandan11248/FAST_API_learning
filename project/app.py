@@ -1,11 +1,19 @@
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-import pandas as pd 
+from pydantic import BaseModel, Field, computed_field,field_validator
+from typing import Literal, Annotated
 import pickle
-from typing import Annotated,Literal,Optional
-from pydantic import BaseModel,Field,computed_field
+import pandas as pd
 
-app=FastAPI()
+# import the ml model
+with open('model.pkl', 'rb') as f:
+    model = pickle.load(f)
+
+
+
+
+app = FastAPI()
+
 tier_1_cities = ["Mumbai", "Delhi", "Bangalore", "Chennai", "Kolkata", "Hyderabad", "Pune"]
 tier_2_cities = [
     "Jaipur", "Chandigarh", "Indore", "Lucknow", "Patna", "Ranchi", "Visakhapatnam", "Coimbatore",
@@ -16,16 +24,23 @@ tier_2_cities = [
     "Kolhapur", "Bilaspur", "Jalandhar", "Noida", "Guntur", "Asansol", "Siliguri"
 ]
 
+# pydantic model to validate incoming data
 class UserInput(BaseModel):
-    name:str
-    age:Annotated[int,Field(...,gt=0,lt=120,description="age of the user",)]
-    weight:Annotated[int,Field(...,gt=0,description="weight of the user")]
+
+    age: Annotated[int, Field(..., gt=0, lt=120, description='Age of the user')]
+    weight: Annotated[float, Field(..., gt=0, description='Weight of the user')]
     height: Annotated[float, Field(..., gt=0, lt=2.5, description='Height of the user')]
     income_lpa: Annotated[float, Field(..., gt=0, description='Annual salary of the user in lpa')]
     smoker: Annotated[bool, Field(..., description='Is user a smoker')]
     city: Annotated[str, Field(..., description='The city that the user belongs to')]
-    occupation: Annotated[Literal['retired', 'freelancer', 'student', 'government_job','business_owner', 'unemployed', 'private_job'], Field(..., description='Occupation of the user')]
-
+    occupation: Annotated[Literal['retired', 'freelancer', 'student', 'government_job',
+       'business_owner', 'unemployed', 'private_job'], Field(..., description='Occupation of the user')]
+    
+    @field_validator('city')
+    @classmethod 
+    def normalize_city(cls, v: str) -> str:
+        v = v.strip().title()
+        return v
 
     @computed_field
     @property
@@ -62,15 +77,30 @@ class UserInput(BaseModel):
             return 2
         else:
             return 3
-       
-    
 
-# import the ml model
-with open('model.pkl', 'rb') as f:
-    model = pickle.load(f)
 
-@app.post("/predict")
-def predict_premium(data: UserInput):
+@app.get('/')
+def home ():
+    return {'message': 'Insurance Premium Prediction API'}
+
+@app.post('/predict')
+# def predict_premium(data: UserInput):
+
+#     input_df = pd.DataFrame([{
+#         'bmi': data.bmi,
+#         'age_group': data.age_group,
+#         'lifestyle_risk': data.lifestyle_risk,
+#         'city_tier': data.city_tier,
+#         'income_lpa': data.income_lpa,
+#         'occupation': data.occupation
+#     }])
+
+#     prediction = model.predict(input_df)[0]
+
+#     return JSONResponse(status_code=200, content={'predicted_category': prediction})
+
+
+def predict_output(data: UserInput):
 
     input_df = pd.DataFrame([{
         'bmi': data.bmi,
@@ -81,6 +111,20 @@ def predict_premium(data: UserInput):
         'occupation': data.occupation
     }])
 
-    prediction = model.predict(input_df)[0]
+    # Predict the class
+    predicted_class = model.predict(input_df)[0]
+    class_labels = model.classes_.tolist()
 
-    return JSONResponse(status_code=200, content={'predicted_category': prediction})
+    # Get probabilities for all classes
+    probabilities = model.predict_proba(input_df)[0]
+    confidence = max(probabilities)
+    
+    # Create mapping: {class_name: probability}
+    class_probs = dict(zip(class_labels, map(lambda p: round(p, 4), probabilities)))
+
+    return {
+        "predicted_category": predicted_class,
+        "confidence": round(confidence, 4),
+        "class_probabilities": class_probs
+    }
+
